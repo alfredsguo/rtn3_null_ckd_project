@@ -1,0 +1,361 @@
+---
+title: "Annotation of ckd_WT2"
+author: "Shuai"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r message=FALSE, warning=FALSE}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+library(Matrix)
+library(gdata)
+library(reshape)
+library(tidyverse)
+library(preprocessCore)
+library(DESeq2)
+library(ggpubr)
+library(EnhancedVolcano)
+```
+
+#----------------------------------------------------------
+# 1. Annotation of 6 scRNAseq data between wt and Rtn3-null
+#----------------------------------------------------------
+
+```{r}
+# Load the data after QC steps
+  ckd_data = readRDS("../Data.freeze/1_data_preprocessing/ckd_after_qc.rds")
+  dim(ckd_data)
+  # Standard processing
+  ckd_data <- NormalizeData(ckd_data)
+  ckd_data <- FindVariableFeatures(ckd_data, selection.method = "vst", nfeatures = 2000)
+  all.genes <- rownames(ckd_data)
+  ckd_data <- ScaleData(ckd_data, features = all.genes)
+  ckd_data <- RunPCA(ckd_data, features = VariableFeatures(object = ckd_data))
+  ckd_data <- RunUMAP(ckd_data, dims = 1:25)
+  ckd_data <- FindNeighbors(object = ckd_data, dims = 1:25)
+  ckd_data <- FindClusters(ckd_data, resolution=0.5)
+  
+  # Visualize the batch effects
+  ckd_data <- RunUMAP(ckd_data, dims = 1:10)
+  p =
+    DimPlot(ckd_data, reduction = "umap", group.by = "orig.ident", label = F,  pt.size =0.005,
+            cols = c("#FF6B6B", "#FFAB76", "#F9F871", "#96BB7C", "#8CC0DE", "#3AB4F2"))
+  p
+  ggsave(filename = "./Image/3_cell_type_annotation/Rtn3_ko_wt_batches.pdf", plot = p, dpi = 600,
+         height = 8, width = 9)
+  
+  # Batch effect cross 6 samples
+  # p =
+    DimPlot(ckd_data, reduction = "umap", group.by = "seurat_clusters", label = T,  pt.size =0.005, label.size = 7)
+  # ggsave(filename = "./Image/3_cell_type_annotation/Rtn3_ko_wt_seurat_clustering.pdf", plot = p, dpi = 600,
+  #        height = 8, width = 10)
+  
+  # Batch effect cross 6 samples
+  Bi_mito = ckd_data$percent.mt
+  Bi_mito_temp = Bi_mito
+  Bi_mito_temp[which(Bi_mito <= 20 )] = "Mito.20"
+  Bi_mito_temp[which(Bi_mito > 20 & Bi_mito <= 30 )] = "Mito.30"
+  Bi_mito_temp[which(Bi_mito > 30 & Bi_mito <= 40 )] = "Mito.40"
+  Bi_mito_temp[which(Bi_mito >= 40 )] = "Mito.40+"
+  ckd_data$Bi_mito = Bi_mito_temp 
+  
+  p = 
+    DimPlot(ckd_data, group.by = "Bi_mito" ,reduction = "umap", label = F,  pt.size =0.005)
+  
+  ggsave(filename = "./Image/3_cell_type_annotation/Rtn3_ko_wt_mitochondiral.pdf", plot = p, dpi = 600,
+         height = 8, width = 9)
+  
+  # Identify the markers of each unsupervised cluster
+  ckd.markers <- FindAllMarkers(ckd_data, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.75)
+  write.csv(ckd.markers, file = "../Data.freeze/2_annotation/Rtn3_ckd_seurat_clustering_markers.csv")
+  
+  ckd.markers = read.csv(file = "../Data.freeze/2_annotation/Rtn3_ckd_seurat_clustering_markers.csv")
+  ckd.markers %>%
+     group_by(cluster) %>%
+     slice_max(n = 2, order_by = avg_log2FC) -> top2
+  ckd_data@active.ident= factor(ckd_data@active.ident, levels=c(27:0))
+  p = DotPlot(object = ckd_data, cols = c("#035397", "#FF6363"),
+              features = unique(top2$gene)) + 
+        theme(axis.text.x = element_text(angle = 90, vjust = 0.55, hjust = 0.55))
+  p
+  ggsave(paste0("./Image/3_cell_type_annotation/Rtn3_ko_wt_seurat_clustering_markers.pdf"), p, width = 12, height = 6.5)
+  
+  # Endo: endothelial,  vascular and descending loop of Henle
+  Endo.marker = c("Pecam1", "Egfl7", "Flt1",
+                  "Emcn","Plpp1","Nrp1","Ly6c1","Egfl7","Meis2","Kdr","Plpp3")
+  for (i in intersect(Endo.marker,row.names(ckd_data))) {
+    print(FeaturePlot(object = ckd_data, features  = i, reduction = "umap")) 
+  }
+  
+  Fibro.marker = c("Vim")
+  for (i in intersect(Fibro.marker,row.names(ckd_data))) {
+    print(FeaturePlot(object = ckd_data, features  = i, reduction = "umap")) 
+  }
+  
+  # PT: proximal tubule
+  # The proximal tubule is the segment of the nephron in kidneys which begins
+  # from the renal pole of the Bowman's capsule to the beginning of loop of Henle.
+  PT.marker = c("Keg1","Slc13a1","Slc22a7","Slc22a13", "G6pc",
+                "Miox","Slc34a1","Akr1c21","Ttc36","Slc27a2","Acsm2","Ass1","Gpx1","Pck1","Lrp2")
+  for (i in intersect(PT.marker,row.names(ckd_data))) {
+    print(FeaturePlot(object = ckd_data, features = i, reduction = "umap")) 
+  }
+  
+  # DCT: distal convoluted tubule
+  # The distal convoluted tubule (DCT) is a short nephron segment, interposed between the macula densa and collecting duct. Even though it is short, it plays a key role in regulating extracellular fluid volume and electrolyte homeostasis.
+  DCT.marker = c("Slc12a3","Cldn8","Calb1","Wnk1","Pvalb","Pgam2","Wnk4","Sgms2","Slc16a7","Lhx1","Abca13")
+  for (i in intersect(DCT.marker,row.names(ckd_data))) {
+    print(FeaturePlot(object = ckd_data, features = i, reduction = "umap")) 
+  }
+  
+  # LOH: loop of henle
+  # long U-shaped portion of the tubule that conducts urine within each nephron of the kidney (Epithelia cells)
+  LOH.marker = c("Arc", "Gem", "Cxcl1", "Fga", "Pla2g7", "Thbs1", "Enc1", "Spsb1", "Arid5a",
+                 "Slc12a1","Umod","Egf","Wfdc15b","Mt2","Ppp1r1a","Mt1","Sostdc1","Slc5a3","Ly6a")
+  for (i in intersect(LOH.marker,row.names(ckd_data))) {
+    print(FeaturePlot(object = ckd_data, features = i, reduction = "umap")) 
+  }
+  
+  # CD-PC: collecting duct principal cell
+  CDPC.marker = c("Rnf186", "Kcne1", "Tacstd2", "Phactr1",
+                  "Aqp2","Hsd11b2","Fxyd4","Apela","Aqp3","Npnt","Scnn1b","Wfdc2","Kcne1","Scnn1g")
+  for (i in intersect(CDPC.marker,row.names(ckd_data))) {
+    print(FeaturePlot(object = ckd_data, features = i, reduction = "umap")) 
+  }
+  
+  # CD-IC: CD intercalated cell
+  CDIC.marker = c("Rhcg", "Adgrf5", "Jag1", "Insrr", "Ap1s3", "P2ry14",
+                  "Atp6v1g3","Atp6v0d2","Hmx2","Car2","Oxgr1","Mme","Tmem61","Slc25a4","Fam13a","Uqcrb")
+  for (i in intersect(CDIC.marker,row.names(ckd_data))) {
+    print(FeaturePlot(object = ckd_data, features = i, reduction = "umap")) 
+  }
+  
+  # CD-Trans: CD transient cell
+  CDTrans.marker = c("St14","Slc16a4", "Gclc", "Enpp5", "Pip4k2c", "Cdc42bpb", "Sec23b", "Ogdh",
+                     "Slc26a4","Car12","Rhbg","Hepacam2","Insrr","Clcnkb","Col18a1","Slc43a2","Tmem117","Sox4")
+  for (i in intersect(CDPC.marker,row.names(ckd_data))) {
+    print(FeaturePlot(object = ckd_data, features = i, reduction = "umap")) 
+  }
+  
+  # Fib: fibroblast
+  Fib.marker = c("Vtn", "Vim", "Col6a2", "Col1a1", "Dcn", "Acta2",
+                 "Lyz2","Plac8","Ifitm3","Ifi27l2a","Lst1","Gngt2","Ms4a6c","S100a4","Lgals3","Clec4a3")
+  for (i in intersect(Fib.marker,row.names(ckd_data))) {
+    print(FeaturePlot(object = ckd_data, features = i, reduction = "umap")) 
+  }
+  
+  # Macro: macrophage
+  Macro.marker = c("Cd74","H2-Aa","H2-Ab1","H2-Eb1","C1qa","C1qb","C1qc","Apoe","Cst3","H2-DMa")
+  Macro.marker = 
+  c("Kit", "Tpsab1", "Tpsb2", "Hdc", # mast <- 
+    "Clec4c", "Lilra4", #pDCs <- c(
+    "Fcer1a", "Cd1a", "Cd1c", # cDCs <- c(
+  # dendritic <- c("ZBTB46", "ITGAX", "LILRB2", "CD1A", "ITGAM") #plasmacytoid dendritic cells and conventional dendritic cells
+    "Cd14", "Cd16", "Fcgr3a", "Fcgr3b", #monocyte
+    "Cd68", "Itgam", "Fcgr1", "Jaml", "Tyrobp") # m1, m2, angio_m, phago_m
+  
+  for (i in intersect(Macro.marker,row.names(ckd_data))) {
+    print(FeaturePlot(object = ckd_data, features = i, reduction = "umap")) 
+  }
+  
+  # Neutro: neutrophil
+  Neutro.marker = c("S100a8","S100a9","Retnlg","Tyrobp","Il1b","Wfdc21","Ngp","Ccl6","S100a6","S100a11")
+  for (i in intersect(Neutro.marker,row.names(ckd_data))) {
+    print(FeaturePlot(object = ckd_data, features = i, reduction = "umap")) 
+  }
+  
+  # B lymphocyte
+  # b_cell <- c("MS4A1","CD19","CD79A", "CD74")
+  # plasma_cell <- c("MZB1", "SSR4", "IGHG1")
+  B.marker = c("Mzb1", "Ssr4", "Ighg1",
+               "Ms4a1","Cd19","Cd79a", "Cd74",
+               "Jchain","Slpi","Mzb1","Cd79a","Cd79b","Ly6d","Ebf1","Mef2c","Sec11c","Txndc5")
+  for (i in intersect(B.marker,row.names(ckd_data))) {
+    print(FeaturePlot(object = ckd_data, features = i, reduction = "umap")) 
+  }
+  
+  # T lymphocyte
+  T.marker = c("Trbc2", "Cd3e", "Cd3d", "Cd4", "Cd8a", "Cd8b")
+    #"Ltb","Rpl12","Gimap3","Rps16","Cxcr6","Rps4x","Il7r","Rps23","Gm10260","Rplp1")
+  for (i in intersect(T.marker,row.names(ckd_data))) {
+    print(FeaturePlot(object = ckd_data, features = i, reduction = "umap")) 
+  }
+  
+  # NK: natural killer cell.
+  NK.marker = c("Klrd1", "Nkg7", "Gnly", "Ccl5","Gzma","Nkg7","Gzmb","Klrd1","Klrk1","Ccnd2","Klre1","Irf8","Klra4")
+  for (i in intersect(NK.marker,row.names(ckd_data))) {
+    print(FeaturePlot(object = ckd_data, features = i, reduction = "umap")) 
+  }
+  
+  # Podo: podocyte
+  # Podocytes are specialized epithelial cells that cover the outer surfaces of glomerular capillaries.
+  Podo.marker = c("Podxl", "Bcam",
+                  "Nupr1", "Cdkn1c","Nphs1","Sparc","Sema3g","Clic3","Rasl11a")
+  for (i in intersect(Podo.marker,row.names(ckd_data))) {
+    print(FeaturePlot(object = ckd_data, features = i, reduction = "umap"))
+  }
+  
+  #Labeling cell subsets
+  seurat.cls <- c(     5, 9, 21, 25,
+                       16,
+                       3, 4, 6, 8,
+                       7, 11,
+                       15,
+                       17,
+                       13,
+                       0,24,
+                       19,
+                       2 , 22, 27,
+                       20,
+                       18,
+                       1, 10, 12, 14, 26,
+                       23       )
+  cluster.ids <- c("Endo", "Endo", "Endo", "Endo",
+                       "Podocyte",
+                       "PT", "PT", "PT", "PT",
+                       "DCT", "DCT", 
+                       "LOH",
+                       "CD",
+                       "Neutro",
+                       "B_lymph", "B_lymph",
+                       "Plasma",
+                       "T_lymph", "T_lymph", "T_lymph",
+                       "NK",
+                       "Myofibro",
+                       "Macro","Macro","Macro","Macro","Macro",
+                       "Erythrocyte")
+  
+  Idents(ckd_data) = ckd_data$seurat_clusters
+  
+  names(cluster.ids) = seurat.cls
+  idx = match(0:27,names(cluster.ids))
+  cluster.ids.ordered = cluster.ids[idx]
+  names(cluster.ids.ordered) <- levels(ckd_data)
+  ckd_data <- RenameIdents(ckd_data, cluster.ids.ordered)
+  DimPlot(ckd_data, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend()
+  
+  ckd_data$Annotation = Idents(ckd_data)
+  
+  ckd_data$orig.ident[which(ckd_data$orig.ident == "CKD.KO1")] = "Rtn3_ko1"
+  ckd_data$orig.ident[which(ckd_data$orig.ident == "CKD.KO2")] = "Rtn3_ko2"
+  ckd_data$orig.ident[which(ckd_data$orig.ident == "CKD.KO3")] = "Rtn3_ko3"
+  
+  ckd_data$orig.ident[which(ckd_data$orig.ident == "CKD.WT1")] = "Rtn3_wt1"
+  ckd_data$orig.ident[which(ckd_data$orig.ident == "CKD.WT2")] = "Rtn3_wt2"
+  ckd_data$orig.ident[which(ckd_data$orig.ident == "CKD.WT3")] = "Rtn3_wt3"
+  
+  ckd_data@active.ident= factor(ckd_data@active.ident,
+                                 levels = c("Endo", "Myofibro", "Podocyte", "PT", "DCT", "LOH", "CD",
+                                            "Erythrocyte", "Macro", "Neutro", "B_lymph", "Plasma", "T_lymph","NK"))
+  
+  save(ckd_data, file = "./Rtn3_ckd_annotated.Rdata")
+```
+
+#------------------------------------------------
+# 2. Visualize the clusterting/annotation results
+#------------------------------------------------
+
+```{r}
+  load(file = "./Rtn3_ckd_annotated.Rdata")
+```
+
+```{r message=FALSE, warning=FALSE, fig.height=5, fig.width=9}
+# 1. visualize the seurat clus percentage per sample
+  # ckd_data$orig.ident
+  clusters = NULL; counts = NULL
+  for (i in 1:length(unique(ckd_data$seurat_clusters))) { clusters = c(clusters, rep(i,6)) }
+  clusters = clusters - 1
+  genotype = rep(c("CKD.KO1", "CKD.KO2", "CKD.KO3",
+                   "CKD.WT1", "CKD.WT2", "CKD.WT3"), length(unique(ckd_data$seurat_clusters)))
+  color = rep(c("#FF6B6B", "#FFAB76", "#F9F871", "#96BB7C", "#8CC0DE", "#3AB4F2"), length(unique(ckd_data$orig.ident)))
+  for (i in 0:27) {
+     for (j in c("Rtn3_ko1", "Rtn3_ko2", "Rtn3_ko3", "Rtn3_wt1", "Rtn3_wt2", "Rtn3_wt3")) {
+      temp <- length(which(ckd_data$orig.ident == j & ckd_data$seurat_clusters == i))
+      counts = c(counts, temp)
+      }
+  }
+  data <- data.frame(Clusters = factor(as.character(clusters), levels=(0:27)),
+                     Genotype = genotype,
+                     Proportions = counts)
+  p = ggplot(data, aes(fill=Genotype, x=Clusters, y=Proportions)) + 
+             geom_bar(position="fill", stat="identity")+
+             scale_fill_manual(labels = c("Rtn3_ko1", "Rtn3_ko2", "Rtn3_ko3", "Rtn3_wt1", "Rtn3_wt2", "Rtn3_wt3"),
+                               values = c("#FF6B6B", "#FFAB76", "#F9F871", "#96BB7C", "#8CC0DE", "#3AB4F2")) +
+             labs(color = "Genotype") +
+             ggtitle("Percentage of original idents per cluster")
+  p
+  ggsave(paste0("./Image/3_cell_type_annotation/Batches_and_seurat_cls_proportion.pdf"), p,
+         width = 8, height = 5)
+  write_csv(data, file = "./Image/3_cell_type_annotation/number_of_cells_per_cluster.csv")
+
+# 2. visualize the cell type percentage per sample
+  clusters = NULL; counts = NULL
+  for (i in 1:length(unique(ckd_data$Annotation))) {
+     clusters = c(clusters, rep(as.character(unique(ckd_data$Annotation)[i]),6))
+  }
+  genotype = rep(c("Rtn3_ko1", "Rtn3_ko2", "Rtn3_ko3",
+                   "Rtn3_wt1", "Rtn3_wt2", "Rtn3_wt3"), length(unique(ckd_data$Annotation)))
+  color = rep(c("#FF6B6B", "#FFAB76", "#F9F871", "#96BB7C", "#8CC0DE", "#3AB4F2"), length(unique(ckd_data$orig.ident))) 
+  for (i in 1:14) {
+     for (j in c("Rtn3_ko1", "Rtn3_ko2", "Rtn3_ko3", "Rtn3_wt1", "Rtn3_wt2", "Rtn3_wt3")) {
+      temp <- length(which(ckd_data$orig.ident == j & ckd_data$Annotation == unique(ckd_data$Annotation)[i]))
+      counts = c(counts, temp)
+      }
+  }
+  data <- data.frame(Clusters = factor(as.character(clusters),
+                                       levels = c("Endo", "Myofibro", "Podocyte",
+                                                  "PT", "DCT", "LOH", "CD",
+                                                  "Erythrocyte", "Macro", "Neutro", "B_lymph", "Plasma", "T_lymph","NK")),
+                     Genotype = genotype,
+                     Proportions = counts)
+  p = ggplot(data, aes(fill=Genotype, x=Clusters, y=Proportions)) + 
+             geom_bar(position="fill", stat="identity")+
+             scale_fill_manual(labels = c("Rtn3_ko1", "Rtn3_ko2", "Rtn3_ko3", "Rtn3_wt1", "Rtn3_wt2", "Rtn3_wt3"),
+                               values = c("#FF6B6B", "#FFAB76", "#F9F871", "#96BB7C", "#8CC0DE", "#3AB4F2")) +
+             labs(color = "Genotype") +
+             ggtitle("Percentage of original idents per cluster")
+  p
+  # ggsave(paste0("./Image/3_cell_type_annotation/Batches_and_cell_type_proportion.pdf"), p,
+  #        width = 8, height = 5)
+  write_csv(data, file = "./Image/3_cell_type_annotation/number_of_cells_per_celltype.csv")
+  
+  table(ckd_data$orig.ident[which(ckd_data$seurat_clusters == 25)]) 
+```
+
+#----------------------------------------
+# 3. Verify the markers of each cell type
+#----------------------------------------
+
+
+```{r fig.width=12, fig.height=4.5}
+if (file.exists("./Image/3_cell_type_annotation/cell_type_markers.csv")) {
+ ckd.markers = read.csv("./Image/3_cell_type_annotation/number_of_cells_per_celltype.csv")
+ ckd.markers %>%
+     group_by(cluster) %>%
+     slice_max(n = 1, order_by = avg_log2FC) -> top2
+ ckd_data@active.ident = ckd_data$Annotation
+ unique(ckd_data@active.ident)
+ ckd_data@active.ident= factor(ckd_data@active.ident,
+                               levels = c("NK", "T_lymph", "Plasma", "B_lymph", "Neutro", "Macro", "Erythrocyte", "CD", "LOH","DCT", "PT", "Podocyte", "Myofibro", "Endo"))
+ p = DotPlot(object = ckd_data, 
+              cols = c("#035397", "#FF6363"),
+              features = unique(top2$gene)) + 
+        theme(axis.text.x = element_text(angle = 90, vjust = 0.55, hjust = 0.55))
+ p
+ ggsave(paste0("./Image/3_cell_type_annotation/Rtn3_ko_wt_cell_type_markers.pdf"), p, width = 12, height = 4.5)  
+} else {
+  ckd.markers <- FindAllMarkers(ckd_data, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.75)
+  write_csv(ckd.markers, file = "./Image/3_cell_type_annotation/cell_type_markers.csv")
+}
+```
+
+```{r message=FALSE, warning=FALSE, fig.height=8, fig.width=10}
+# Batch effect cross 6 samples
+p = DimPlot(ckd_data, reduction = "umap", group.by = "Annotation", label = T,  pt.size =0.005, label.size = 7)
+# cols = c("#FF6B6B", "#FFAB76", "#F9F871", "#96BB7C", "#8CC0DE", "#3AB4F2")
+ggsave(filename = "./Image/3_cell_type_annotation/Rtn3_ko_wt_cell_type.pdf", plot = p, dpi = 600,
+       height = 8, width = 10)
+```
