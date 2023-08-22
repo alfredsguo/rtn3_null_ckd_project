@@ -1,0 +1,181 @@
+---
+title: "Annotation of ckd_WT2"
+author: "Shuai"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r message=FALSE, warning=FALSE}
+# Packages
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+library(Matrix)
+library(gdata)
+library(reshape)
+library(tidyverse)
+library(preprocessCore)
+library(DESeq2)
+library(ggpubr)
+library(EnhancedVolcano)
+library(RColorBrewer)
+```
+
+#----------------------------------------------------------
+# 1. Load the KO and WT dataset and simulate the pseudobulk
+#----------------------------------------------------------
+
+```{r warning=FALSE}
+  if (file.exists("../Data.freeze/2_annotation/simulated_pseudobulk.Rdata")) {
+    load("../Data.freeze/2_annotation/simulated_pseudobulk.Rdata")
+  } else {
+    load("../Data.freeze/2_annotation/Rtn3_ckd_annotated.Rdata")
+    # sample-level pseudobulk
+    genotype = ckd_data$orig.ident
+    pseudobulk.sample = sapply(unique(genotype), function(gt){
+      x = as.matrix(ckd_data@assays$RNA@counts) [,genotype %in% gt, drop = FALSE]
+      Matrix::rowSums(x)
+    })
+    # cell-type-level pseudobulk, genotype X cell
+    celltype = paste0(ckd_data$orig.ident,"_",ckd_data$Annotation) 
+    pseudobulk.celltype = sapply(unique(celltype), function(ct){
+      x = as.matrix(ckd_data@assays$RNA@counts)[,celltype %in% ct, drop = FALSE]
+      rowSums(x) })
+    re_order = NULL
+    for (i in 1:14) {
+      temp = paste0(unique(ckd_data$orig.ident),"_",unique(ckd_data$Annotation)[i])
+      re_order = c(re_order, temp)}
+    pseudobulk.celltype = pseudobulk.celltype[,re_order]
+    save(pseudobulk.sample, pseudobulk.celltype, file = "../Data.freeze/2_annotation/simulated_pseudobulk.Rdata")
+  }
+
+  cell.order = unique(sapply(strsplit(colnames(pseudobulk.celltype), split = "_" ), "[[", 3)) 
+  for (i in 1:14) {
+    temp = pseudobulk.celltype[,((i-1)*6+1):(i*6)]
+    assign(x = paste0("pseudobulk_",cell.order[i]), value = temp)
+  }
+  rm("temp")
+```
+
+```{r fig.height=3, fig.width=18}
+pseudobulk.sample["Rtn3",]
+# Idents(ckd_data) = paste0(ckd_data$orig.ident,"_",ckd_data$Annotation)
+# VlnPlot(ckd_data, features = "Lars2", pt.size = 0) + geom_boxplot() + NoLegend()
+```
+
+#------------------------------------------
+# 2. DE Analysis pseudobulk at sample level
+#------------------------------------------
+
+```{r}
+if (file.exists("./DE_res/1_Rtn3-ko_vs_Rtn3-wt_sample-level.csv")) {
+  res = read.csv("./DE_res/1_Rtn3-ko_vs_Rtn3-wt_sample-level.csv", row.names = 1)
+} else {
+  # prepare the inputs for DEseq2
+  pseudobulk.sample = pseudobulk.sample[apply(pseudobulk.sample,1, function(x) all(x!= 0)),]
+  df.norm <- as.data.frame(normalize.quantiles(as.matrix(pseudobulk.sample)))
+  colnames(df.norm) = colnames(pseudobulk.sample)
+  rownames(df.norm) = rownames(pseudobulk.sample)
+  colData = data.frame(Design= c(rep("Rtn3_ko", 3),rep("Rtn3_wt", 3)))
+  rownames(colData) = colnames(df.norm)
+  colData$Design = factor(colData$Design)
+
+  # run DEseq2 DE analysis
+  dds <- DESeqDataSetFromMatrix(round(df.norm),
+                                colData = colData,
+                                design = ~ Design)
+  dds$Design <- relevel(x = dds$Design, ref = c("Rtn3_wt"))
+  dds <- DESeq(dds)
+  res <- results(dds)
+  write.csv(as.data.frame(res[order(res$padj),]), file="./DE_res/1_Rtn3-ko_vs_Rtn3-wt_sample-level.csv")
+
+  # pdf("./Image/4_simulated_pseduobulk_results/volcano.pdf", height = 7, width = 10)
+  # EnhancedVolcano(res,
+  #                 lab = rownames(res),
+  #                 x = 'log2FoldChange', y = 'pvalue',
+  #                 title = "Rtn3-ko vs Rtn3-wt (pseudobulk)",
+  #                 pCutoff = 5e-2, FCcutoff = 1, pointSize = 1.5,
+  #                 labSize = 5.0, selectLab = c("Rtn3"), # xlim=c(-3,3), ylim=c(0,12),
+  #                 col= c('black', 'yellow', 'blue', 'red'))
+  # dev.off()
+
+  p = ggmaplot(res, main = expression("Rtn3-ko vs Rtn3-wt (pseudobulk)"),
+               fdr = 0.05, fc = 2, size = 1,
+               palette = c("#B31B21", "#1465AC", "darkgray"),  label.select = c("Rtn3"),
+               genenames = as.vector(row.names(res)),
+               legend = "top", top = 0,
+               font.label = c("bold", 11), label.rectangle = TRUE,
+               font.legend = "bold",
+               font.main = "bold",
+               ggtheme = ggplot2::theme_minimal())
+  ggsave(filename = "./Image/4_simulated_pseduobulk_results/MA_plot_ko_vs_wt.pdf", p, height = 5, width = 6, dpi = 300)
+  
+  DEgenes = row.names(res)[which(res$padj <= 0.05 & res$log2FoldChange >= 1.75 | res$log2FoldChange <= -2)]
+  DEgenes = DEgenes[-grep(DEgenes, pattern = "^Gm")]
+  DEgenes = DEgenes[-grep(DEgenes, pattern = "^Ig")]
+  # DE genes identified from sample-wise pseudo-bulk
+  # "Ren1"    "Rgs4"    "Fabp4"   "Ifi44"   "Fam167b" "Ptpru"
+  # "Kdr"     "Cyp26b1" "Plvap"   "Lama4"   "Btnl9"  
+  # "Cd300lg" "Esm1"    "Galnt15" "Npr3"    "Gpihbp1"
+  # "Pcdh12"  "Rtn3"    "Il33"   
+  
+  mat = sqrt(pseudobulk.sample[DEgenes,c("Rtn3_wt1","Rtn3_wt2","Rtn3_wt3","Rtn3_ko1","Rtn3_ko2","Rtn3_ko3")])
+  breaksList = seq(0,90, by = 0.5)
+  pdf("./Image/4_simulated_pseduobulk_results/Sample_wise/pheatmap_ko_vs_wt.pdf", height = 3.5, width = 4)
+  pheatmap::pheatmap(mat,
+                     color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList)),
+                     breaks = breaksList, cluster_rows = T, cluster_cols = F)
+  dev.off()
+}
+```
+
+#---------------------------------------------
+# 3. DE Analysis pseudobulk at cell type level
+#---------------------------------------------
+
+```{r}
+# prepare the inputs for DEseq2
+for (k in cell.order) {
+  temp.mat = get(paste0("pseudobulk_",k))
+  temp.mat = temp.mat[apply(temp.mat, 1, function(x) all(x!= 0)),]
+  df.norm <- as.data.frame(normalize.quantiles(as.matrix(temp.mat)))
+  colnames(df.norm) = colnames(temp.mat)
+  rownames(df.norm) = rownames(temp.mat)
+  colData = data.frame(Design= c(rep("Rtn3_ko", 3),rep("Rtn3_wt", 3)))
+  rownames(colData) = colnames(df.norm)
+  colData$Design = factor(colData$Design)
+  # run DEseq2 DE analysis
+  dds <- DESeqDataSetFromMatrix(round(df.norm),
+                                colData = colData,
+                                design = ~ Design)
+  dds$Design <- relevel(x = dds$Design, ref = c("Rtn3_wt"))
+  dds <- DESeq(dds)
+  res <- results(dds)
+  write.csv(as.data.frame(res[order(res$padj),]),
+            file = paste0("./DE_res/Rtn3-ko_vs_Rtn3-wt_",k,".csv"))}
+
+for (k in cell.order) {
+  res = read.csv(paste0("./DE_res/Rtn3-ko_vs_Rtn3-wt_",k,".csv"), row.names = 1)
+
+  p = EnhancedVolcano(res,
+                  lab = rownames(res),
+                  x = 'log2FoldChange', y = 'pvalue',
+                  title = "Rtn3-ko vs Rtn3-wt (pseudobulk)",
+                  pCutoff = 5e-2, FCcutoff = 1, pointSize = 1.5,
+                  labSize = 5.0, selectLab = c("Rtn3"), # xlim=c(-3,3), ylim=c(0,12),
+                  col= c('black', 'yellow', 'blue', 'red'))
+  ggsave(filename = paste0("./Image/4_simulated_pseduobulk_results/",k,"_volcano.pdf"), p, height = 7, width = 10)
+
+  p = ggmaplot(res, main = expression("Rtn3-ko vs Rtn3-wt (pseudobulk)"),
+               fdr = 0.05, fc = 1.5, size = 1,
+               palette = c("#B31B21", "#1465AC", "darkgray"),  label.select = c("Rtn3"),
+               genenames = as.vector(row.names(res)),
+               legend = "top", top = 0,
+               font.label = c("bold", 11), label.rectangle = TRUE,
+               font.legend = "bold",
+               font.main = "bold",
+               ggtheme = ggplot2::theme_minimal())
+  ggsave(filename = paste0("./Image/4_simulated_pseduobulk_results/",k,"_maplot.pdf"), p, height = 5, width = 6, dpi = 300)
+}
+```

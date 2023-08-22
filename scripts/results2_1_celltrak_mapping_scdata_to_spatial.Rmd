@@ -1,0 +1,735 @@
+---
+title: "Mapping Rtn3 wt and ko to spatial data"
+author: "Shuai"
+date: "7/30/2022"
+output: html_document
+---
+
+```{r message=FALSE, warning=FALSE}
+options(stringsAsFactors = F)
+
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+# library(Matrix)
+library()
+library(gdata)
+library(reshape)
+library(tidyverse)
+library(preprocessCore)
+library(DESeq2)
+library(ggpubr)
+library(EnhancedVolcano)
+
+library("CellTrek")
+library("dplyr")
+library("viridis")
+library(patchwork)
+library(rstatix)
+# devtools::install_github("navinlabcode/CellTrek")
+```
+
+##############################
+Preprocessing the spatial data
+##############################
+
+```{r}
+if (file.exists("../Data.freeze/4_celltrek//Renal_spatial_reference.RData")) {
+  load("../Data.freeze/4_celltrek/Renal_spatial_reference.RData")
+} else {
+  Renal_st = Seurat::Load10X_Spatial(data.dir = "../Raw_data/Spatial_RNAseq/")
+  k_means = read.csv("../Raw_data/Spatial_RNAseq/analysis/clustering/kmeans_2_clusters/clusters.csv")
+  row.names(k_means) = k_means$Barcode
+  k_means = k_means[colnames(Renal_st),]
+  Renal_st$k_means_2 = k_means$Cluster
+  Renal_spatial_ref = subset(Renal_st, subset = k_means_2 == "1")
+  Renal_spatial_ref <- SCTransform(Renal_spatial_ref, assay = "Spatial", verbose = FALSE)
+  save(Renal_spatial_ref, file = "../Data.freeze/4_celltrek//Renal_spatial_reference.RData")
+}
+```
+
+########################################
+Prepare annotated single-cell data set
+########################################
+
+```{r}
+load("../Data.freeze/20220724_data_after_annotation/Rtn3_ckd_annotated.Rdata")
+
+Idents(ckd_data) = ckd_data$orig.ident
+unique(Idents(ckd_data))
+Rtn3_ko_subset = subset(x = ckd_data, idents = c("Rtn3_ko1","Rtn3_ko2","Rtn3_ko3"))
+Rtn3_wt_subset = subset(x = ckd_data, idents = c("Rtn3_wt1","Rtn3_wt2","Rtn3_wt3"))
+save(Rtn3_ko_subset, file = "../Data.freeze/3_subset_scdata/Rtn3_ko_subset.RData")
+save(Rtn3_wt_subset, file = "../Data.freeze/3_subset_scdata/Rtn3_wt_subset.RData")
+
+Idents(ckd_data) = ckd_data$Annotation
+unique(Idents(ckd_data))
+for (k in unique(Idents(ckd_data))) {
+  Rtn3_subset = subset(x = ckd_data, idents = k)
+  assign(x = paste0("Rtn3_renal_",k), value = Rtn3_subset)
+  save(list = c(paste0("Rtn3_renal_",k)), file = paste0("../Data.freeze/3_subset_scdata/Rtn3_renal_",k,".RData"))
+}
+
+unique(Idents(ckd_data)) 
+Rtn3_renal_epi = subset(ckd_data, idents = c("Podocyte", "PT", "LOH", "DCT", "CD"))
+Rtn3_renal_stromal = subset(ckd_data, idents = c("Endo", "Myofibro"))
+Rtn3_renal_immu = subset(ckd_data, idents = c("Macro", "Neutro"))
+
+save(Rtn3_renal_epi, file = "../Data.freeze/3_subset_scdata/Rtn3_renal_epithelial.RData")
+save(Rtn3_renal_stromal, file = "../Data.freeze/3_subset_scdata/Rtn3_renal_stromal.RData")
+save(Rtn3_renal_immu, file = "../Data.freeze/3_subset_scdata/Rtn3_renal_immune.RData")
+```
+
+########################################
+Mapping three major cell types to ST
+########################################
+
+```{r}
+# epithelial cell
+load("../Data.freeze/3_subset_scdata/Rtn3_renal_epithelial.RData")
+CKD_st_data <- Renal_spatial_ref
+CKD_sc_data<- Rtn3_renal_epi
+
+## Rename the cells/spots with syntactically valid names
+CKD_st_data <- RenameCells(CKD_st_data, new.names=make.names(Cells(CKD_st_data)))
+CKD_sc_data<- RenameCells(CKD_sc_data, new.names=make.names(Cells(CKD_sc_data)))
+
+## co-embed
+CKD_traint <- CellTrek::traint(st_data=CKD_st_data, sc_data=CKD_sc_data, sc_assay='RNA', st_assay = 'Spatial', cell_names='Annotation')
+
+## cell charting
+CKD_celltrek <- CellTrek::celltrek(st_sc_int=CKD_traint, int_assay='traint', sc_data=CKD_sc_data, sc_assay = 'RNA', 
+                                   reduction='pca', intp=T, intp_pnt=5000, intp_lin=F, nPCs=30, ntree=1000, 
+                                   dist_thresh=0.55, top_spot=5, spot_n=5, repel_r=20, repel_iter=20, keep_model=T)$celltrek
+
+CKD_celltrek$Genotype = paste0(substr(CKD_celltrek$orig.ident,1,7))
+
+Rtn3_mapping_epi_to_st = CKD_celltrek
+save(Rtn3_mapping_epi_to_st, file = "../Data.freeze/4_celltrek//Rtn3_mapping_epi_to_st.RData")
+
+# stromal cell
+load("../Data.freeze/3_subset_scdata/Rtn3_renal_stromal.RData")
+CKD_st_data <- Renal_spatial_ref
+CKD_sc_data<- Rtn3_renal_stromal
+
+## Rename the cells/spots with syntactically valid names
+CKD_st_data <- RenameCells(CKD_st_data, new.names=make.names(Cells(CKD_st_data)))
+CKD_sc_data<- RenameCells(CKD_sc_data, new.names=make.names(Cells(CKD_sc_data)))
+
+## co-embed
+CKD_traint <- CellTrek::traint(st_data=CKD_st_data, sc_data=CKD_sc_data, sc_assay='RNA', st_assay = 'Spatial', cell_names='Annotation')
+
+## cell charting
+CKD_celltrek <- CellTrek::celltrek(st_sc_int=CKD_traint, int_assay='traint', sc_data=CKD_sc_data, sc_assay = 'RNA', 
+                                   reduction='pca', intp=T, intp_pnt=5000, intp_lin=F, nPCs=30, ntree=1000, 
+                                   dist_thresh=0.55, top_spot=5, spot_n=5, repel_r=20, repel_iter=20, keep_model=T)$celltrek
+
+CKD_celltrek$Genotype = paste0(substr(CKD_celltrek$orig.ident,1,7))
+
+Rtn3_mapping_stromal_to_st = CKD_celltrek
+save(Rtn3_mapping_stromal_to_st, file = "../Data.freeze/4_celltrek/Rtn3_mapping_stromal_to_st.RData")
+
+# immune cell
+load("../Data.freeze/3_subset_scdata/Rtn3_renal_immune.RData")
+CKD_st_data <- Renal_spatial_ref
+CKD_sc_data<- Rtn3_renal_immu
+
+## Rename the cells/spots with syntactically valid names
+CKD_st_data <- RenameCells(CKD_st_data, new.names=make.names(Cells(CKD_st_data)))
+CKD_sc_data<- RenameCells(CKD_sc_data, new.names=make.names(Cells(CKD_sc_data)))
+
+## co-embed
+CKD_traint <- CellTrek::traint(st_data=CKD_st_data, sc_data=CKD_sc_data, sc_assay='RNA', st_assay = 'Spatial', cell_names='Annotation')
+
+## cell charting
+CKD_celltrek <- CellTrek::celltrek(st_sc_int=CKD_traint, int_assay='traint', sc_data=CKD_sc_data, sc_assay = 'RNA', 
+                                   reduction='pca', intp=T, intp_pnt=5000, intp_lin=F, nPCs=30, ntree=1000, 
+                                   dist_thresh=0.55, top_spot=5, spot_n=5, repel_r=20, repel_iter=20, keep_model=T)$celltrek
+
+CKD_celltrek$Genotype = paste0(substr(CKD_celltrek$orig.ident,1,7))
+
+Rtn3_mapping_imm_to_st = CKD_celltrek
+save(Rtn3_mapping_imm_to_st, file = "../Data.freeze/4_celltrek/Rtn3_mapping_imm_to_st.RData")
+```
+
+#################################
+Mapping all wt and ko cells to ST
+#################################
+```{r}
+load("../Data.freeze/3_subset_scdata/Rtn3_ko_subset.RData")
+load("../Data.freeze/3_subset_scdata/Rtn3_wt_subset.RData")
+```
+
+
+```{r}
+CKD_st_data <- Renal_spatial_ref
+CKD_sc_data<- Rtn3_wt_subset
+
+## Rename the cells/spots with syntactically valid names
+CKD_st_data <- RenameCells(CKD_st_data, new.names=make.names(Cells(CKD_st_data)))
+CKD_sc_data<- RenameCells(CKD_sc_data, new.names=make.names(Cells(CKD_sc_data)))
+
+## co-embed
+CKD_traint <- CellTrek::traint(st_data=CKD_st_data, sc_data=CKD_sc_data, sc_assay='RNA', st_assay = 'Spatial', cell_names='Annotation')
+
+## cell charting
+CKD_celltrek <- CellTrek::celltrek(st_sc_int=CKD_traint, int_assay='traint', sc_data=CKD_sc_data, sc_assay = 'RNA', 
+                                   reduction='pca', intp=T, intp_pnt=5000, intp_lin=F, nPCs=30, ntree=1000, 
+                                   dist_thresh=0.55, top_spot=5, spot_n=5, repel_r=20, repel_iter=20, keep_model=T)$celltrek
+
+CKD_celltrek$Genotype = paste0(substr(CKD_celltrek$orig.ident,1,7))
+
+Rtn3_mapping_wt_to_st = CKD_celltrek
+save(Rtn3_mapping_wt_to_st, file = "../Data.freeze/4_celltrek//Rtn3_mapping_wt_to_st.RData")
+
+load("../Data.freeze/3_subset_scdata/Rtn3_ko_subset.RData")
+CKD_st_data <- Renal_spatial_ref
+CKD_sc_data<- Rtn3_ko_subset
+
+## Rename the cells/spots with syntactically valid names
+CKD_st_data <- RenameCells(CKD_st_data, new.names=make.names(Cells(CKD_st_data)))
+CKD_sc_data<- RenameCells(CKD_sc_data, new.names=make.names(Cells(CKD_sc_data)))
+
+## co-embed
+CKD_traint <- CellTrek::traint(st_data=CKD_st_data, sc_data=CKD_sc_data, sc_assay='RNA', st_assay = 'Spatial', cell_names='Annotation')
+
+## cell charting
+CKD_celltrek <- CellTrek::celltrek(st_sc_int=CKD_traint, int_assay='traint', sc_data=CKD_sc_data, sc_assay = 'RNA', 
+                                   reduction='pca', intp=T, intp_pnt=5000, intp_lin=F, nPCs=30, ntree=1000, 
+                                   dist_thresh=0.55, top_spot=5, spot_n=5, repel_r=20, repel_iter=20, keep_model=T)$celltrek
+
+CKD_celltrek$Genotype = paste0(substr(CKD_celltrek$orig.ident,1,7))
+
+Rtn3_mapping_ko_to_st = CKD_celltrek
+save(Rtn3_mapping_ko_to_st, file = "../Data.freeze/4_celltrek//Rtn3_mapping_ko_to_st.RData")
+```
+
+```{r}
+# Analysis the whole WT and whole KO in situ
+load("../Data.freeze/4_celltrek//Rtn3_mapping_wt_to_st.RData")
+load("../Data.freeze/4_celltrek//Rtn3_mapping_ko_to_st.RData")
+
+SpatialDimPlot(Rtn3_mapping_wt_to_st, group.by = "Genotype")
+SpatialDimPlot(Rtn3_mapping_wt_to_st, group.by = "Annotation")
+SpatialDimPlot(Rtn3_mapping_ko_to_st, group.by = "Genotype")
+SpatialDimPlot(Rtn3_mapping_ko_to_st, group.by = "Annotation")
+```
+
+
+##############################
+Mapping cells to ST - 1 Podocyte
+##############################
+
+```{r}
+load("../Data.freeze/3_subset_scdata/Rtn3_renal_Podocyte.RData")
+CKD_st_data <- Renal_spatial_ref
+CKD_sc_data<- Rtn3_renal_Podocyte
+
+## Rename the cells/spots with syntactically valid names
+CKD_st_data <- RenameCells(CKD_st_data, new.names=make.names(Cells(CKD_st_data)))
+CKD_sc_data<- RenameCells(CKD_sc_data, new.names=make.names(Cells(CKD_sc_data)))
+
+## co-embed
+CKD_traint <- CellTrek::traint(st_data=CKD_st_data, sc_data=CKD_sc_data, sc_assay='RNA', st_assay = 'Spatial', cell_names='Annotation')
+
+## cell charting
+CKD_celltrek <- CellTrek::celltrek(st_sc_int=CKD_traint, int_assay='traint', sc_data=CKD_sc_data, sc_assay = 'RNA', 
+                                   reduction='pca', intp=T, intp_pnt=5000, intp_lin=F, nPCs=30, ntree=1000, 
+                                   dist_thresh=0.55, top_spot=5, spot_n=5, repel_r=20, repel_iter=20, keep_model=T)$celltrek
+
+CKD_celltrek$Genotype = paste0(substr(CKD_celltrek$orig.ident,1,7))
+SpatialDimPlot(CKD_celltrek, group.by = "Genotype")
+Rtn3_mapping_podocyte_to_st = CKD_celltrek
+save(Rtn3_mapping_podocyte_to_st, file = "../Data.freeze/4_celltrek/Rtn3_mapping_podocyte_to_st.RData")
+```
+
+##############################
+Mapping cells to ST - 2 PT
+##############################
+
+```{r}
+load("../Data.freeze/3_subset_scdata/Rtn3_renal_PT.RData")
+CKD_st_data <- Renal_spatial_ref
+CKD_sc_data<- Rtn3_renal_PT
+
+## Rename the cells/spots with syntactically valid names
+CKD_st_data <- RenameCells(CKD_st_data, new.names=make.names(Cells(CKD_st_data)))
+CKD_sc_data<- RenameCells(CKD_sc_data, new.names=make.names(Cells(CKD_sc_data)))
+
+## co-embed
+CKD_traint <- CellTrek::traint(st_data=CKD_st_data, sc_data=CKD_sc_data, sc_assay='RNA', st_assay = 'Spatial', cell_names='Annotation')
+
+## cell charting
+CKD_celltrek <- CellTrek::celltrek(st_sc_int=CKD_traint, int_assay='traint', sc_data=CKD_sc_data, sc_assay = 'RNA', 
+                                   reduction='pca', intp=T, intp_pnt=5000, intp_lin=F, nPCs=30, ntree=1000, 
+                                   dist_thresh=0.55, top_spot=5, spot_n=5, repel_r=20, repel_iter=20, keep_model=T)$celltrek
+
+CKD_celltrek$Genotype = paste0(substr(CKD_celltrek$orig.ident,1,7))
+SpatialDimPlot(CKD_celltrek, group.by = "Genotype")
+Rtn3_mapping_pt_to_st = CKD_celltrek
+save(Rtn3_mapping_pt_to_st, file = "../Data.freeze/4_celltrek//Rtn3_mapping_pt_to_st.RData")
+```
+
+
+##############################
+Mapping cells to ST - 3 LOH
+##############################
+
+```{r}
+load("../Data.freeze/3_subset_scdata/Rtn3_renal_LOH.RData")
+CKD_st_data <- Renal_spatial_ref
+CKD_sc_data<- Rtn3_renal_LOH
+
+## Rename the cells/spots with syntactically valid names
+CKD_st_data <- RenameCells(CKD_st_data, new.names=make.names(Cells(CKD_st_data)))
+CKD_sc_data<- RenameCells(CKD_sc_data, new.names=make.names(Cells(CKD_sc_data)))
+
+## co-embed
+CKD_traint <- CellTrek::traint(st_data=CKD_st_data, sc_data=CKD_sc_data, sc_assay='RNA', st_assay = 'Spatial', cell_names='Annotation')
+
+## cell charting
+CKD_celltrek <- CellTrek::celltrek(st_sc_int=CKD_traint, int_assay='traint', sc_data=CKD_sc_data, sc_assay = 'RNA', 
+                                   reduction='pca', intp=T, intp_pnt=5000, intp_lin=F, nPCs=30, ntree=1000, 
+                                   dist_thresh=0.55, top_spot=5, spot_n=5, repel_r=20, repel_iter=20, keep_model=T)$celltrek
+
+CKD_celltrek$Genotype = paste0(substr(CKD_celltrek$orig.ident,1,7))
+SpatialDimPlot(CKD_celltrek, group.by = "Genotype")
+Rtn3_mapping_loh_to_st = CKD_celltrek
+save(Rtn3_mapping_loh_to_st, file = "../Data.freeze/4_celltrek//Rtn3_mapping_loh_to_st.RData")
+```
+
+##############################
+Mapping cells to ST - 4 DCT
+##############################
+
+```{r}
+load("../Data.freeze/3_subset_scdata/Rtn3_renal_DCT.RData")
+CKD_st_data <- Renal_spatial_ref
+CKD_sc_data<- Rtn3_renal_DCT
+
+## Rename the cells/spots with syntactically valid names
+CKD_st_data <- RenameCells(CKD_st_data, new.names=make.names(Cells(CKD_st_data)))
+CKD_sc_data<- RenameCells(CKD_sc_data, new.names=make.names(Cells(CKD_sc_data)))
+
+## co-embed
+CKD_traint <- CellTrek::traint(st_data=CKD_st_data, sc_data=CKD_sc_data, sc_assay='RNA', st_assay = 'Spatial', cell_names='Annotation')
+
+
+## cell charting
+CKD_celltrek <- CellTrek::celltrek(st_sc_int=CKD_traint, int_assay='traint', sc_data=CKD_sc_data, sc_assay = 'RNA', 
+                                   reduction='pca', intp=T, intp_pnt=5000, intp_lin=F, nPCs=30, ntree=1000, 
+                                   dist_thresh=0.55, top_spot=5, spot_n=5, repel_r=20, repel_iter=20, keep_model=T)$celltrek
+
+CKD_celltrek$Genotype = paste0(substr(CKD_celltrek$orig.ident,1,7))
+SpatialDimPlot(CKD_celltrek, group.by = "Genotype")
+Rtn3_mapping_dct_to_st = CKD_celltrek
+save(Rtn3_mapping_dct_to_st, file = "../Data.freeze/4_celltrek//Rtn3_mapping_dct_to_st.RData")
+```
+
+##############################
+Mapping cells to ST - 5 CD
+##############################
+
+```{r}
+load("../Data.freeze/3_subset_scdata/Rtn3_renal_CD.RData")
+CKD_st_data <- Renal_spatial_ref
+CKD_sc_data<- Rtn3_renal_CD
+
+## Rename the cells/spots with syntactically valid names
+CKD_st_data <- RenameCells(CKD_st_data, new.names=make.names(Cells(CKD_st_data)))
+CKD_sc_data<- RenameCells(CKD_sc_data, new.names=make.names(Cells(CKD_sc_data)))
+
+## co-embed
+CKD_traint <- CellTrek::traint(st_data=CKD_st_data, sc_data=CKD_sc_data, sc_assay='RNA', st_assay = 'Spatial', cell_names='Annotation')
+# 
+# ## We can check the co-embedding result to see if there is overlap between these two data modalities
+# DimPlot(CKD_traint, group.by = "type") 
+
+## cell charting
+CKD_celltrek <- CellTrek::celltrek(st_sc_int=CKD_traint, int_assay='traint', sc_data=CKD_sc_data, sc_assay = 'RNA', 
+                                   reduction='pca', intp=T, intp_pnt=5000, intp_lin=F, nPCs=30, ntree=1000, 
+                                   dist_thresh=0.55, top_spot=5, spot_n=5, repel_r=20, repel_iter=20, keep_model=T)$celltrek
+
+CKD_celltrek$Genotype = paste0(substr(CKD_celltrek$orig.ident,1,7))
+SpatialDimPlot(CKD_celltrek, group.by = "Genotype")
+Rtn3_mapping_cd_to_st = CKD_celltrek
+save(Rtn3_mapping_cd_to_st, file = "../Data.freeze/4_celltrek//Rtn3_mapping_cd_to_st.RData")
+```
+
+##############################
+Mapping cells to ST - 6 Endo
+##############################
+
+```{r}
+load("../Data.freeze/3_subset_scdata/Rtn3_renal_Endo.RData")
+CKD_st_data <- Renal_spatial_ref
+CKD_sc_data<- Rtn3_renal_Endo
+
+## Rename the cells/spots with syntactically valid names
+CKD_st_data <- RenameCells(CKD_st_data, new.names=make.names(Cells(CKD_st_data)))
+CKD_sc_data<- RenameCells(CKD_sc_data, new.names=make.names(Cells(CKD_sc_data)))
+
+## co-embed
+CKD_traint <- CellTrek::traint(st_data=CKD_st_data, sc_data=CKD_sc_data, sc_assay='RNA', st_assay = 'Spatial', cell_names='Annotation')
+# 
+# ## We can check the co-embedding result to see if there is overlap between these two data modalities
+# DimPlot(CKD_traint, group.by = "type") 
+
+## cell charting
+CKD_celltrek <- CellTrek::celltrek(st_sc_int=CKD_traint, int_assay='traint', sc_data=CKD_sc_data, sc_assay = 'RNA', 
+                                   reduction='pca', intp=T, intp_pnt=5000, intp_lin=F, nPCs=30, ntree=1000, 
+                                   dist_thresh=0.55, top_spot=5, spot_n=5, repel_r=20, repel_iter=20, keep_model=T)$celltrek
+
+CKD_celltrek$Genotype = paste0(substr(CKD_celltrek$orig.ident,1,7))
+SpatialDimPlot(CKD_celltrek, group.by = "Genotype")
+Rtn3_mapping_endo_to_st = CKD_celltrek
+save(Rtn3_mapping_endo_to_st, file = "../Data.freeze/4_celltrek//Rtn3_mapping_endo_to_st.RData")
+```
+
+##############################
+Mapping cells to ST - 7 Myofibro
+##############################
+
+```{r}
+load("../Data.freeze/3_subset_scdata/Rtn3_renal_Myofibro.RData")
+CKD_st_data <- Renal_spatial_ref
+CKD_sc_data<- Rtn3_renal_Myofibro
+
+## Rename the cells/spots with syntactically valid names
+CKD_st_data <- RenameCells(CKD_st_data, new.names=make.names(Cells(CKD_st_data)))
+CKD_sc_data<- RenameCells(CKD_sc_data, new.names=make.names(Cells(CKD_sc_data)))
+
+## co-embed
+CKD_traint <- CellTrek::traint(st_data=CKD_st_data, sc_data=CKD_sc_data, sc_assay='RNA', st_assay = 'Spatial', cell_names='Annotation')
+
+
+## cell charting
+CKD_celltrek <- CellTrek::celltrek(st_sc_int=CKD_traint, int_assay='traint', sc_data=CKD_sc_data, sc_assay = 'RNA', 
+                                   reduction='pca', intp=T, intp_pnt=5000, intp_lin=F, nPCs=30, ntree=1000, 
+                                   dist_thresh=0.55, top_spot=5, spot_n=5, repel_r=20, repel_iter=20, keep_model=T)$celltrek
+
+CKD_celltrek$Genotype = paste0(substr(CKD_celltrek$orig.ident,1,7))
+SpatialDimPlot(CKD_celltrek, group.by = "Genotype")
+Rtn3_mapping_myofib_to_st = CKD_celltrek
+save(Rtn3_mapping_myofib_to_st, file = "../Data.freeze/4_celltrek//Rtn3_mapping_myofib_to_st.RData")
+```
+
+##############################
+Mapping cells to ST - 8 Macro
+##############################
+
+```{r}
+load("../Data.freeze/3_subset_scdata/Rtn3_renal_Macro.RData")
+CKD_st_data <- Renal_spatial_ref
+CKD_sc_data<- Rtn3_renal_Macro
+
+## Rename the cells/spots with syntactically valid names
+CKD_st_data <- RenameCells(CKD_st_data, new.names=make.names(Cells(CKD_st_data)))
+CKD_sc_data<- RenameCells(CKD_sc_data, new.names=make.names(Cells(CKD_sc_data)))
+
+## co-embed
+CKD_traint <- CellTrek::traint(st_data=CKD_st_data, sc_data=CKD_sc_data, sc_assay='RNA', st_assay = 'Spatial', cell_names='Annotation')
+
+
+## cell charting
+CKD_celltrek <- CellTrek::celltrek(st_sc_int=CKD_traint, int_assay='traint', sc_data=CKD_sc_data, sc_assay = 'RNA', 
+                                   reduction='pca', intp=T, intp_pnt=5000, intp_lin=F, nPCs=30, ntree=1000, 
+                                   dist_thresh=0.55, top_spot=5, spot_n=5, repel_r=20, repel_iter=20, keep_model=T)$celltrek
+
+CKD_celltrek$Genotype = paste0(substr(CKD_celltrek$orig.ident,1,7))
+SpatialDimPlot(CKD_celltrek, group.by = "Genotype")
+Rtn3_mapping_macro_to_st = CKD_celltrek
+save(Rtn3_mapping_macro_to_st, file = "../Data.freeze/4_celltrek//Rtn3_mapping_macro_to_st.RData")
+```
+
+```{r}
+# load("../Data.freeze/3_subset_scdata/Rtn3_renal_Neutro.RData")
+# CKD_st_data <- Renal_spatial_ref
+# CKD_sc_data<- Rtn3_renal_Neutro
+# 
+# ## Rename the cells/spots with syntactically valid names
+# CKD_st_data <- RenameCells(CKD_st_data, new.names=make.names(Cells(CKD_st_data)))
+# CKD_sc_data<- RenameCells(CKD_sc_data, new.names=make.names(Cells(CKD_sc_data)))
+# 
+# ## co-embed
+# CKD_traint <- CellTrek::traint(st_data=CKD_st_data, sc_data=CKD_sc_data, sc_assay='RNA', st_assay = 'Spatial', cell_names='Annotation')
+# 
+# ## cell charting
+# CKD_celltrek <- CellTrek::celltrek(st_sc_int=CKD_traint, int_assay='traint', sc_data=CKD_sc_data, sc_assay = 'RNA', 
+#                                    reduction='pca', intp=T, intp_pnt=5000, intp_lin=F, nPCs=30, ntree=1000, 
+#                                    dist_thresh=0.55, top_spot=5, spot_n=5, repel_r=20, repel_iter=20, keep_model=T)$celltrek
+# 
+# CKD_celltrek$Genotype = paste0(substr(CKD_celltrek$orig.ident,1,7))
+# SpatialDimPlot(CKD_celltrek, group.by = "Genotype")
+# Rtn3_mapping_neutro_to_st = CKD_celltrek
+# save(Rtn3_mapping_neutro_to_st, file = "../Data.freeze/4_celltrek//Rtn3_mapping_neutro_to_st.RData")
+```
+
+```{r fig.height=4, fig.width=5}
+load("../Data.freeze/4_celltrek/Rtn3_mapping_podocyte_to_st.RData")
+# load("../Data.freeze/4_celltrek/Rtn3_mapping_pt_to_st.RData")
+# load("../Data.freeze/4_celltrek/Rtn3_mapping_loh_to_st.RData")
+# load("../Data.freeze/4_celltrek/Rtn3_mapping_dct_to_st.RData")
+# load("../Data.freeze/4_celltrek/Rtn3_mapping_cd_to_st.RData")
+load("../Data.freeze/4_celltrek/Rtn3_mapping_myofib_to_st.RData")
+load("../Data.freeze/4_celltrek/Rtn3_mapping_macro_to_st.RData")
+load("../Data.freeze/4_celltrek/Rtn3_mapping_endo_to_st.RData")
+# load("../Data.freeze/4_celltrek//Rtn3_mapping_neutro_to_st.RData")
+load("../Data.freeze/4_celltrek//Rtn3_mapping_epi_to_st.RData")
+
+pdf(file = "./Image/3_mapping_cell_in_situ/detailed_cell_type_mapping_to_st.pdf", width = 5, height = 4)
+
+SpatialDimPlot(Rtn3_mapping_epi_to_st, group.by = "Genotype")  + 
+  scale_fill_manual(values=c("#FF6363", "#035397"))
+
+SpatialDimPlot(Rtn3_mapping_podocyte_to_st, group.by = "Genotype")  + 
+  scale_fill_manual(values=c("#FF6363", "#035397"))
+
+# Rtn3_mapping_pt_to_st$Genotype = paste0(substr(Rtn3_mapping_pt_to_st$orig.ident,1,7))
+# SpatialDimPlot(Rtn3_mapping_pt_to_st, group.by = "Genotype")  + 
+#   scale_fill_manual(values=c("#FF6363", "#035397"))
+# 
+# SpatialDimPlot(Rtn3_mapping_loh_to_st, group.by = "Genotype")  + 
+#   scale_fill_manual(values=c("#FF6363", "#035397"))
+# 
+# SpatialDimPlot(Rtn3_mapping_dct_to_st, group.by = "Genotype")  + 
+#   scale_fill_manual(values=c("#FF6363", "#035397"))
+# 
+# SpatialDimPlot(Rtn3_mapping_cd_to_st, group.by = "Genotype")  + 
+#   scale_fill_manual(values=c("#FF6363", "#035397"))
+
+SpatialDimPlot(Rtn3_mapping_endo_to_st, group.by = "Genotype")  + 
+  scale_fill_manual(values=c("#FF6363", "#035397"))
+
+SpatialDimPlot(Rtn3_mapping_myofib_to_st, group.by = "Genotype")  + 
+  scale_fill_manual(values=c("#FF6363", "#035397"))
+
+SpatialDimPlot(Rtn3_mapping_macro_to_st, group.by = "Genotype")  + 
+  scale_fill_manual(values=c("#FF6363", "#035397"))
+# 
+# SpatialDimPlot(Rtn3_mapping_neutro_to_st, group.by = "Genotype")  + 
+#   scale_fill_manual(values=c("#FF6363", "#035397"))
+
+dev.off()
+```
+
+```{r}
+
+# load("../Data.freeze/4_celltrek//Rtn3_mapping_epi_to_st.RData")
+# load("../Data.freeze/4_celltrek//Rtn3_mapping_stromal_to_st.RData")
+# load("../Data.freeze/4_celltrek//Rtn3_mapping_imm_to_st.RData")
+# 
+# # pdf(file = "./Image/4_mapping_cell_in_situ/mega_cell_type_mapping_to_st.pdf", width = 6, height = 5)
+# SpatialDimPlot(Rtn3_mapping_epi_to_st, group.by = "Genotype")  + 
+#   scale_fill_manual(values=c("#FF6363", "#035397"))
+# SpatialDimPlot(Rtn3_mapping_stromal_to_st, group.by = "Genotype")  + 
+#   scale_fill_manual(values=c("#FF6363", "#035397"))
+# SpatialDimPlot(Rtn3_mapping_imm_to_st, group.by = "Genotype")  + 
+#   scale_fill_manual(values=c("#FF6363", "#035397"))
+# # dev.off()
+```
+
+###########################
+Test distribution to center
+###########################
+
+```{r}
+# Renal_st@images$slice1@coordinates$imagerow
+coords = read.csv("../Raw_data/Spatial_RNAseq/spatial/tissue_positions_list.csv", header = F)
+center_x = median(coords$V5)
+center_y = median(coords$V6)
+```
+
+```{r fig.width=11, fig.height=4.5, dpi=300, warning=FALSE, message=FALSE}
+# library(rstatix)
+  celltype_order = c("epi","podocyte","myofib","endo","macro")
+  
+  dist_st = NULL
+  geno_st = NULL
+  cell_st = NULL
+  
+  for (i in celltype_order) {
+    celltrek_temp = get(paste0("Rtn3_mapping_",i,"_to_st"))
+    dist_temp = sqrt((celltrek_temp$coord_x - median(celltrek_temp$coord_x))^2+(celltrek_temp$coord_y-median(celltrek_temp$coord_y))^2)
+    geno_temp = celltrek_temp$Genotype
+    cell_temp = rep(i, length(geno_temp))
+    dist_st = c(dist_st, dist_temp)
+    geno_st = c(geno_st, geno_temp)
+    cell_st = c(cell_st, cell_temp)
+  }
+```
+
+
+```{r fig.width=8, fig.height=3, dpi=300, warning=FALSE, message=FALSE}
+  data <- data.frame(
+      Distance = dist_st,
+      Genotype = factor(geno_st, levels = c("Rtn3_wt", "Rtn3_ko")),
+      Celltype = cell_st) #factor(cell_st, levels = celltype_order) )
+
+  data$Celltype = factor(data$Celltype, levels = c("epi","podocyte","myofib","endo","macro"))
+  cls = c("#035397","#FF6363")
+
+  p =
+    data %>%
+      ggplot(aes(x=Celltype, y = Distance, color = Genotype))+theme_classic() +
+      geom_boxplot(aes(color=Genotype), alpha = 0.7, position=position_dodge(0.8),outlier.shape = NA)+
+      geom_point(position = position_jitterdodge(), size = 0.1)+
+      geom_vline(xintercept = seq(1.5, 9.5, 1), col="black", lty=3) +
+      scale_color_manual(values=cls) +
+      scale_fill_manual(values=cls) +
+      theme(title=element_text(size=6), axis.text.x=element_text(size=10, angle=45, hjust=1),
+            axis.title.x=element_text(size=0), axis.text.y=element_text(size=12),
+            axis.title.y=element_text(size=12, face="bold"), legend.position = "right",
+            legend.text=element_text(size=6), legend.title=element_text(size=6)) #+ yscale("log2") #+ ylim(0, 1)
+  print(p)
+  ggsave(plot = p, filename = "./Image/3_mapping_cell_in_situ/boxplot_show_distance2.pdf", height = 3, width = 8)
+```
+
+```{r}
+for (i in  c("epi","podocyte","myofib","endo","macro")) {
+  data_temp = data[which(data$Celltype == i),]
+  stat.test <- data_temp %>%
+    t_test(Distance ~ Genotype) %>%
+    adjust_pvalue(method = "BH")
+  print(paste0(i,": ",stat.test$p.adj))
+}
+```
+
+
+
+
+<!-- ```{r fig.width=11, fig.height=4.5, dpi=300, warning=FALSE, message=FALSE} -->
+<!-- Med.Renal= data.frame(Genotype = unique(as.character(Rtn3_mapping_pt_to_st$Genotype)), -->
+<!--                       med = c(by(data = Rtn3_mapping_pt_to_st$dist, INDICES = as.character(Rtn3_mapping_pt_to_st$Genotype), FUN = median))) -->
+<!-- Med.Renal$Genotype = rownames(Med.Renal) -->
+<!-- Med.Renal[order(Med.Renal$med, decreasing = F), "order"] = 1:2 -->
+<!-- Med.Renal.reorder = Med.Renal[order(Med.Renal$order),] -->
+<!-- data.plot = merge(data, Med.Renal.reorder, by="Genotype") -->
+
+<!-- violin_plot =  -->
+<!-- ggplot(data.plot, aes(x=reorder(Genotype, dist, FUN=median, decreasing = F), y= dist)) + theme_bw() + -->
+<!--   geom_violin(aes(fill=Genotype, color=Genotype), alpha = 0.7, position=position_dodge(0.8)) + -->
+<!--   labs(title="", x="", y = "Distance to the renal center") + guides(fill=FALSE) + -->
+<!--   geom_vline(xintercept = 1:(2-1)+0.5, col="grey", lty=3) + -->
+<!--   geom_jitter(width = 0.15, size=0.15) + -->
+<!--   scale_color_manual(values=cls) + -->
+<!--   scale_fill_manual(values=cls) +  -->
+<!--   scale_y_continuous(breaks = seq(round(min(data.plot$dist)), round(max(data.plot$dist)), 2000)) + yscale("log2") + -->
+<!--   geom_segment(aes(x=order-0.4, xend=order+0.4, y=med, yend=med), color="black", size=1) + -->
+<!--   theme(title=element_text(size=6), axis.text.x=element_text(size=10, angle=60, hjust=1),  -->
+<!--         axis.title.x=element_text(size=6), axis.text.y=element_text(size=12), -->
+<!--         axis.title.y=element_text(size=12, face="bold"), legend.position = "none", -->
+<!--         legend.text=element_text(size=6), legend.title=element_text(size=6)) -->
+
+<!-- stat.test <- data %>% -->
+<!--   t_test(dist ~ Genotype) %>% -->
+<!--   adjust_pvalue(method = "BH") %>% -->
+<!--   add_significance() -->
+<!-- stat.test -->
+<!-- stat.test <- stat.test %>% add_xy_position(x = "Genotype") -->
+<!-- p = violin_plot + stat_pvalue_manual(stat.test, label = "p.adj.signif", y.position = log2(max(data.plot$dist))+0.3) # -->
+<!-- print(p) -->
+<!-- # ggsave(plot = p, filename = "./Image/4_mapping_cell_in_situ/Spatial_dist_epi.pdf", width = 2.5, height = 4, dpi = 300) -->
+<!-- ``` -->
+
+<!-- ```{r fig.width=3.5, fig.height=4.5, dpi=300, warning=FALSE} -->
+<!-- Rtn3_mapping_stromal_to_st$dist = sqrt((Rtn3_mapping_stromal_to_st$coord_x-center_x)^2+(Rtn3_mapping_stromal_to_st$coord_y-center_y)^2) -->
+<!-- data <- data.frame( -->
+<!--   dist = Rtn3_mapping_stromal_to_st$dist, -->
+<!--   Genotype = Rtn3_mapping_stromal_to_st$Genotype) -->
+<!-- cls = c("#FF6363", "#035397") -->
+
+<!-- Med.Renal= data.frame(Genotype = unique(as.character(Rtn3_mapping_stromal_to_st$Genotype)), -->
+<!--                       med = c(by(data = Rtn3_mapping_stromal_to_st$dist, INDICES = as.character(Rtn3_mapping_stromal_to_st$Genotype), FUN = median))) -->
+<!-- Med.Renal$Genotype = rownames(Med.Renal) -->
+<!-- Med.Renal[order(Med.Renal$med, decreasing = F), "order"] = 1:2 -->
+<!-- Med.Renal.reorder = Med.Renal[order(Med.Renal$order),] -->
+<!-- data.plot = merge(data, Med.Renal.reorder, by="Genotype") -->
+
+<!-- violin_plot =  -->
+<!-- ggplot(data.plot, aes(x=reorder(Genotype, dist, FUN=median, decreasing = F), y= dist)) + theme_bw() + -->
+<!--   geom_violin(aes(fill=Genotype, color=Genotype), alpha = 0.7, position=position_dodge(0.8)) + -->
+<!--   labs(title="", x="", y = "Distance to the renal center") + guides(fill=FALSE) + -->
+<!--   geom_vline(xintercept = 1:(2-1)+0.5, col="grey", lty=3) + -->
+<!--   geom_jitter(width = 0.15, size=0.15) + -->
+<!--   scale_color_manual(values=cls) + -->
+<!--   scale_fill_manual(values=cls) +  -->
+<!--   scale_y_continuous(breaks = seq(round(min(data.plot$dist)), round(max(data.plot$dist)), 2000)) + yscale("log2") + -->
+<!--   geom_segment(aes(x=order-0.4, xend=order+0.4, y=med, yend=med), color="black", size=1) + -->
+<!--   theme(title=element_text(size=6), axis.text.x=element_text(size=10, angle=60, hjust=1),  -->
+<!--         axis.title.x=element_text(size=6), axis.text.y=element_text(size=12), -->
+<!--         axis.title.y=element_text(size=12, face="bold"), legend.position = "none", -->
+<!--         legend.text=element_text(size=6), legend.title=element_text(size=6)) -->
+
+<!-- stat.test <- data %>% -->
+<!--   t_test(dist ~ Genotype) %>% -->
+<!--   adjust_pvalue(method = "BH") %>% -->
+<!--   add_significance() -->
+<!-- stat.test <- stat.test %>% add_xy_position(x = "Genotype") -->
+<!-- stat.test -->
+
+<!-- p = violin_plot + stat_pvalue_manual(stat.test, label = "p.adj.signif", y.position = log2(max(data.plot$dist))+0.3) # -->
+<!-- print(p) -->
+<!-- ggsave(plot = p, filename = "./Image/4_mapping_cell_in_situ/Spatial_dist_stromal.pdf", width = 2.5, height = 4, dpi = 300) -->
+<!-- ``` -->
+
+<!-- ```{r fig.width=2.5, fig.height=4.5, dpi=300, warning=FALSE} -->
+<!-- Rtn3_mapping_imm_to_st$dist = sqrt((Rtn3_mapping_imm_to_st$coord_x-center_x)^2+(Rtn3_mapping_imm_to_st$coord_y-center_y)^2) -->
+<!-- data <- data.frame( -->
+<!--   dist = Rtn3_mapping_imm_to_st$dist, -->
+<!--   Genotype = Rtn3_mapping_imm_to_st$Genotype) -->
+<!-- # data -->
+<!-- cls = c("#FF6363", "#035397") # c( "#6883bc", "#56B4E9", "#E69F00") -->
+
+<!-- Med.Renal= data.frame(Genotype = unique(as.character(Rtn3_mapping_imm_to_st$Genotype)), -->
+<!--                       med = c(by(data = Rtn3_mapping_imm_to_st$dist, INDICES = as.character(Rtn3_mapping_imm_to_st$Genotype), FUN = median))) -->
+<!--                     # mad = c(by(data = data$dist, INDICES = as.character(data$Genotype), FUN = mad)) -->
+<!-- Med.Renal$Genotype = rownames(Med.Renal) -->
+<!-- Med.Renal[order(Med.Renal$med, decreasing = F), "order"] = 1:2 -->
+<!-- Med.Renal.reorder = Med.Renal[order(Med.Renal$order),] -->
+<!-- data.plot = merge(data, Med.Renal.reorder, by="Genotype") -->
+<!-- # data.plot -->
+<!-- violin_plot =  -->
+<!-- ggplot(data.plot, aes(x=reorder(Genotype, dist, FUN=median, decreasing = F), y= dist)) + theme_bw() + -->
+<!--   geom_violin(aes(fill=Genotype, color=Genotype), alpha = 0.7, position=position_dodge(0.8)) + -->
+<!--   labs(title="", x="", y = "Distance to the renal center") + guides(fill=FALSE) + -->
+<!--   geom_vline(xintercept = 1:(2-1)+0.5, col="grey", lty=3) + -->
+<!--   geom_jitter(width = 0.15, size=0.15) + -->
+<!--   scale_color_manual(values=cls) + -->
+<!--   scale_fill_manual(values=cls) +  -->
+<!--   scale_y_continuous(breaks = seq(round(min(data.plot$dist)), round(max(data.plot$dist)), 2000)) + yscale("log2") + -->
+<!--   geom_segment(aes(x=order-0.4, xend=order+0.4, y=med, yend=med), color="black", size=1) + -->
+<!--   theme(title=element_text(size=6), axis.text.x=element_text(size=10, angle=60, hjust=1),  -->
+<!--         axis.title.x=element_text(size=6), axis.text.y=element_text(size=12), -->
+<!--         axis.title.y=element_text(size=12, face="bold"), legend.position = "none", -->
+<!--         legend.text=element_text(size=6), legend.title=element_text(size=6)) -->
+<!-- # print(violin_plot) -->
+
+<!-- stat.test <- data %>% -->
+<!--   t_test(dist ~ Genotype) %>% -->
+<!--   adjust_pvalue(method = "BH") %>% -->
+<!--   add_significance() -->
+<!-- stat.test <- stat.test %>% add_xy_position(x = "Genotype") -->
+<!-- stat.test -->
+
+<!-- p = violin_plot + stat_pvalue_manual(stat.test, label = "p.adj.signif", y.position = log2(max(data.plot$dist))+0.3) # -->
+<!-- print(p) -->
+<!-- ggsave(plot = p, filename = "./Image/4_mapping_cell_in_situ/Spatial_dist_imm.pdf", width = 2.5, height = 4, dpi = 300) -->
+<!-- ``` -->
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
